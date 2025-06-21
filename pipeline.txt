@@ -1,0 +1,6 @@
+* Feature extraction - cv::SIFT
+* Feature matching - cv.BFMatcher / cv.FlannBasedMatcher
+* 8 point algorihtm - cv::findFundamentalMat
+* rectification - 
+* disparity - 
+* mesh reconstruction
