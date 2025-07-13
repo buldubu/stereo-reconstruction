@@ -1,212 +1,209 @@
 #include "SemiGlobalMatching.h"
-#include <limits>
+#include <iostream>
+#include <bitset>
+#include <climits>
 
 SemiGlobalMatching::SemiGlobalMatching(
-    const cv::Mat& left, const cv::Mat& right,
-    int max_disp_, int census_size_,
-    int filter_size_, int occlusion_threshold_,
-    int penalty1_, int penalty2_)
-  : max_disp(max_disp_),
-    half_census(census_size_/2),
-    filter_size(filter_size_),
-    occl_thresh(occlusion_threshold_),
-    P1(penalty1_), P2(penalty2_)
+    const cv::Mat& left,
+    const cv::Mat& right,
+    int max_disp,
+    int census_size,
+    int filter_size,
+    int occlusion_seuil,
+    int penalty_1,
+    int penalty_2
+) : max_disp(max_disp),
+    census_size(census_size),
+    filter_size(filter_size),
+    occlusion_seuil(occlusion_seuil),
+    penalty_1(penalty_1),
+    penalty_2(penalty_2)
 {
+    left_I = left.clone();
+    right_I = right.clone();
+    height = left_I.rows;
+    width = left_I.cols;
 
-    cv::cvtColor(left,  left_gray,  cv::COLOR_BGR2GRAY);
-    cv::cvtColor(right, right_gray, cv::COLOR_BGR2GRAY);
-    H = left_gray.rows;  W = left_gray.cols;
+    disparities = cv::Mat::zeros(height, width, CV_8U);
+    disparity_f32 = cv::Mat::zeros(height, width, CV_32F);
 
-    censusL = cv::Mat(H, W, CV_64F);
-    censusR = cv::Mat(H, W, CV_64F);
-    costVol.resize(max_disp, cv::Mat(H, W, CV_16U));
-    aggVol.assign(4, std::vector<cv::Mat>(max_disp, cv::Mat(H, W, CV_32S)));
-    dispRaw = cv::Mat(H, W, CV_32F, cv::Scalar(-1));
-    disp8   = cv::Mat(H, W, CV_8U,  cv::Scalar(0));
+    left_cost_volume.resize(max_disp);
+    for(int d = 0; d < max_disp; ++d)
+        left_cost_volume[d] = cv::Mat::zeros(height, width, CV_32S);
+
+    aggregation_volume.resize(4);
+    for(int dir = 0; dir < 4; ++dir) {
+        aggregation_volume[dir].resize(max_disp);
+        for(int d = 0; d < max_disp; ++d)
+            aggregation_volume[dir][d] = cv::Mat::zeros(height, width, CV_32S);
+    }
 }
 
-void SemiGlobalMatching::compute() {
-    censusTransform(left_gray,  censusL);
-    censusTransform(right_gray, censusR);
-    buildCostVolume();
-    aggregateCosts();
-    selectDisparity();
+void SemiGlobalMatching::SGM_process() {
+    compute_costs();
+    aggregate_costs();
 
-    SemiGlobalMatching rightSGM = *this;
-    std::swap(rightSGM.censusL, rightSGM.censusR);
-    rightSGM.buildCostVolume();
-    rightSGM.aggregateCosts();
-    rightSGM.selectDisparity();
-    leftRightCheck(rightSGM.dispRaw);
+    cv::Mat sum_vol = cv::Mat::zeros(height, width, CV_32S);
+    for(int d = 0; d < max_disp; ++d) {
+        cv::Mat sum_dir = cv::Mat::zeros(height, width, CV_32S);
+        for(int dir = 0; dir < 4; ++dir)
+            cv::add(sum_dir, aggregation_volume[dir][d], sum_dir);
 
-    holeFillingAndFilter();
-
-    dispRaw.convertTo(disp8, CV_8U, 255.0f / max_disp);
-}
-
-
-uint64_t SemiGlobalMatching::censusAt(const cv::Mat& I, int y, int x) {
-    uint64_t code = 0, bit = 1;
-    uchar center = I.at<uchar>(y, x);
-    for(int dy=-half_census; dy<=half_census; ++dy) {
-        for(int dx=-half_census; dx<=half_census; ++dx) {
-            if(dy==0 && dx==0) continue;
-            if(I.at<uchar>(y+dy, x+dx) < center)
-                code |= bit;
-            bit <<= 1;
+        for(int y = 0; y < height; ++y) {
+            for(int x = 0; x < width; ++x) {
+                int v = sum_dir.at<int>(y, x);
+                if(d == 0 || v < sum_vol.at<int>(y, x)) {
+                    sum_vol.at<int>(y, x) = v;
+                    disparities.at<uchar>(y, x) = static_cast<uchar>(d);
+                    disparity_f32.at<float>(y, x) = static_cast<float>(d);
+                }
+            }
         }
     }
-    return code;
+
+    disparities.convertTo(disparities, CV_8U, 255.0 / max_disp);
+
+    for(int y = 0; y < height; ++y) {
+        for(int x = 0; x < width; ++x) {
+            if(disparities.at<uchar>(y, x) <= occlusion_seuil) {
+                disparities.at<uchar>(y, x) = 0;
+                disparity_f32.at<float>(y, x) = -1.0f;
+            }
+        }
+    }
+
+    cv::medianBlur(disparities, disparities, filter_size);
 }
 
-void SemiGlobalMatching::censusTransform(const cv::Mat& src, cv::Mat& dst) {
-    for(int y=half_census; y<H-half_census; ++y)
-        for(int x=half_census; x<W-half_census; ++x)
-            dst.at<double>(y, x) = static_cast<double>(censusAt(src, y, x));
+cv::Mat SemiGlobalMatching::get_disparity() const {
+    return disparities.clone();
 }
 
-void SemiGlobalMatching::buildCostVolume() {
-    for(int d=0; d<max_disp; ++d) {
-        auto& C = costVol[d];
-        C.setTo(USHRT_MAX);
-        for(int y=half_census; y<H-half_census; ++y) {
-            for(int x=half_census; x<W-half_census; ++x) {
-                int xr = x - d;
-                if(xr < half_census) continue;
-                uint64_t L = (uint64_t)censusL.at<double>(y,x);
-                uint64_t R = (uint64_t)censusR.at<double>(y,xr);
-                C.at<uint16_t>(y,x) = static_cast<uint16_t>(popcount64(L ^ R));
+cv::Mat SemiGlobalMatching::get_disparity_float() const {
+    return disparity_f32.clone();
+}
+
+void SemiGlobalMatching::compute_costs() {
+    cv::Mat lc = cv::Mat::zeros(height, width, CV_64F);
+    cv::Mat rc = cv::Mat::zeros(height, width, CV_64F);
+    int half = census_size / 2;
+    int bits_len = census_size * census_size - 1;
+
+    for(int y = half; y < height - half; ++y) {
+        for(int x = half; x < width - half; ++x) {
+            std::string bits;
+            bits.reserve(bits_len);
+            int cvL = left_I.at<int>(y, x);
+            for(int dy = -half; dy <= half; ++dy) {
+                for(int dx = -half; dx <= half; ++dx) {
+                    if(dy == 0 && dx == 0) continue;
+                    bits.push_back(left_I.at<int>(y + dy, x + dx) < cvL ? '1' : '0');
+                }
+            }
+            lc.at<double>(y, x) = std::bitset<64>(bits).to_ullong();
+
+            bits.clear();
+            int cvR = right_I.at<int>(y, x);
+            for(int dy = -half; dy <= half; ++dy) {
+                for(int dx = -half; dx <= half; ++dx) {
+                    if(dy == 0 && dx == 0) continue;
+                    bits.push_back(right_I.at<int>(y + dy, x + dx) < cvR ? '1' : '0');
+                }
+            }
+            rc.at<double>(y, x) = std::bitset<64>(bits).to_ullong();
+        }
+    }
+
+    cv::Mat rcensus = cv::Mat::zeros(height, width, CV_64F);
+    for(int d = 0; d < max_disp; ++d) {
+        rcensus.setTo(0);
+        cv::Rect src(half, 0, width - half - d, height);
+        cv::Rect dst(half + d, 0, width - half - d, height);
+        rc(src).copyTo(rcensus(dst));
+
+        for(int y = half; y < height - half; ++y) {
+            for(int x = half; x < width - half; ++x) {
+                if(x - d < half) continue;
+                uint64_t L = (uint64_t)lc.at<double>(y, x);
+                uint64_t R = (uint64_t)rcensus.at<double>(y, x);
+                uint64_t X = L ^ R;
+                int cnt = 0;
+                while(X) { X &= (X - 1); ++cnt; }
+                left_cost_volume[d].at<int>(y, x) = cnt;
             }
         }
     }
 }
 
-cv::Mat SemiGlobalMatching::aggregate1D(const cv::Mat& slice) {
-    int N = slice.rows;  
-    cv::Mat path(N, max_disp, CV_32S);
-
-    for(int d=0; d<max_disp; ++d)
-        path.at<int>(0,d) = slice.at<int>(0,d);
-
-    // İteratif
-    for(int i=1; i<N; ++i) {
-        int prev_min = INT_MAX;
-        for(int d=0; d<max_disp; ++d)
-            prev_min = std::min(prev_min, path.at<int>(i-1,d));
-
-        for(int d=0; d<max_disp; ++d) {
-            int C = slice.at<int>(i,d);
-            int c1 = path.at<int>(i-1,d);
-            int c2 = (d>0   ? path.at<int>(i-1,d-1) + P1 : INT_MAX);
-            int c3 = (d<max_disp-1 ? path.at<int>(i-1,d+1) + P1 : INT_MAX);
-            int c4 = prev_min + P2;
-            int m  = std::min({c1,c2,c3,c4});
-            path.at<int>(i,d) = C + m - prev_min;
+cv::Mat SemiGlobalMatching::get_path_cost(const cv::Mat& block) {
+    int N = block.rows;
+    cv::Mat path = cv::Mat::zeros(N, max_disp, CV_32S);
+    cv::Mat pen = cv::Mat::zeros(max_disp, max_disp, CV_32S);
+    for(int i = 0; i < max_disp; ++i) {
+        for(int j = 0; j < max_disp; ++j) {
+            int diff = std::abs(i - j);
+            if(diff == 1) pen.at<int>(i, j) = penalty_1;
+            else if(diff > 1) pen.at<int>(i, j) = penalty_2;
         }
     }
+
+    for(int d = 0; d < max_disp; ++d)
+        path.at<int>(0, d) = block.at<int>(0, d);
+
+    for(int i = 1; i < N; ++i) {
+        int pm = INT_MAX;
+        for(int d = 0; d < max_disp; ++d)
+            pm = std::min(pm, path.at<int>(i - 1, d));
+
+        for(int d = 0; d < max_disp; ++d) {
+            int best = INT_MAX;
+            for(int dp = 0; dp < max_disp; ++dp)
+                best = std::min(best, path.at<int>(i - 1, dp) + pen.at<int>(dp, d));
+            path.at<int>(i, d) = block.at<int>(i, d) + best - pm;
+        }
+    }
+
     return path;
 }
 
 void SemiGlobalMatching::aggregate_costs() {
     for(int x = 0; x < width; ++x) {
-        cv::Mat col(height, max_disp, CV_32S);
+        cv::Mat col = cv::Mat::zeros(height, max_disp, CV_32S);
         for(int y = 0; y < height; ++y)
             for(int d = 0; d < max_disp; ++d)
-                col.at<int>(y,d) = left_cost_volume[d].at<int>(y,x);
+                col.at<int>(y, d) = left_cost_volume[d].at<int>(y, x);
 
         cv::Mat north = get_path_cost(col);
+        for(int y = 0; y < height; ++y)
+            for(int d = 0; d < max_disp; ++d)
+                aggregation_volume[0][d].at<int>(y, x) = north.at<int>(y, d);
 
-        cv::Mat col_flip, south_tmp, south;
-        cv::flip(col, col_flip, 0);
-        south_tmp = get_path_cost(col_flip);
-        cv::flip(south_tmp, south, 0);
-
-        for(int y = 0; y < height; ++y) {
-            for(int d = 0; d < max_disp; ++d) {
-                aggregation_volume[0][d].at<int>(y,x) = north.at<int>(y,d);
-                aggregation_volume[1][d].at<int>(y,x) = south.at<int>(y,d);
-            }
-        }
+        cv::Mat f1, f2;
+        cv::flip(col, f1, 0);
+        f2 = get_path_cost(f1);
+        cv::flip(f2, f2, 0);
+        for(int y = 0; y < height; ++y)
+            for(int d = 0; d < max_disp; ++d)
+                aggregation_volume[1][d].at<int>(y, x) = f2.at<int>(y, d);
     }
 
     for(int y = 0; y < height; ++y) {
-        cv::Mat row(width, max_disp, CV_32S);
+        cv::Mat row = cv::Mat::zeros(width, max_disp, CV_32S);
         for(int x = 0; x < width; ++x)
             for(int d = 0; d < max_disp; ++d)
-                row.at<int>(x,d) = left_cost_volume[d].at<int>(y,x);
+                row.at<int>(x, d) = left_cost_volume[d].at<int>(y, x);
 
         cv::Mat west = get_path_cost(row);
+        for(int x = 0; x < width; ++x)
+            for(int d = 0; d < max_disp; ++d)
+                aggregation_volume[2][d].at<int>(y, x) = west.at<int>(x, d);
 
-        cv::Mat row_flip, east_tmp, east;
-        cv::flip(row, row_flip, 0);
-        east_tmp = get_path_cost(row_flip);
-        cv::flip(east_tmp, east, 0);
-
-        for(int x = 0; x < width; ++x) {
-            for(int d = 0; d < max_disp; ++d) {
-                aggregation_volume[2][d].at<int>(y,x) = west.at<int>(x,d);
-                aggregation_volume[3][d].at<int>(y,x) = east.at<int>(x,d);
-            }
-        }
+        cv::Mat f1, f2;
+        cv::flip(row, f1, 0);
+        f2 = get_path_cost(f1);
+        cv::flip(f2, f2, 0);
+        for(int x = 0; x < width; ++x)
+            for(int d = 0; d < max_disp; ++d)
+                aggregation_volume[3][d].at<int>(y, x) = f2.at<int>(x, d);
     }
-}
-void SemiGlobalMatching::selectDisparity() {
-
-    for(int y=0; y<H; ++y) {
-        for(int x=0; x<W; ++x) {
-            int bestD = 0;
-            int bestCost = INT_MAX;
-            for(int d=0; d<max_disp; ++d) {
-                int c = 0;
-                for(int dir=0; dir<4; ++dir)
-                    c += aggVol[dir][d].at<int>(y,x);
-                if(c < bestCost) {
-                    bestCost = c;
-                    bestD = d;
-                }
-            }
-            dispRaw.at<float>(y,x) = static_cast<float>(bestD);
-        }
-    }
-}
-
-void SemiGlobalMatching::leftRightCheck(const cv::Mat& rightRaw) {
-    for(int y=0; y<H; ++y){
-        for(int x=0; x<W; ++x){
-            float dl = dispRaw.at<float>(y,x);
-            int xr = int(x - dl);
-            if(xr<0 || xr>=W) { dispRaw.at<float>(y,x) = -1; continue; }
-            float dr = rightRaw.at<float>(y,xr);
-            if(std::abs(dl - dr) > occl_thresh)
-                dispRaw.at<float>(y,x) = -1;
-        }
-    }
-}
-
-void SemiGlobalMatching::holeFillingAndFilter() {
-    for(int y=0; y<H; ++y){
-        for(int x=0; x<W; ++x){
-            if(dispRaw.at<float>(y,x) < 0) {
-                float sum=0; int cnt=0;
-                for(int dy=-1; dy<=1; ++dy){
-                    for(int dx=-1; dx<=1; ++dx){
-                        int yy=y+dy, xx=x+dx;
-                        if(yy<0||yy>=H||xx<0||xx>=W) continue;
-                        float v = dispRaw.at<float>(yy,xx);
-                        if(v>=0) { sum+=v; cnt++; }
-                    }
-                }
-                if(cnt>0) dispRaw.at<float>(y,x) = sum/cnt;
-            }
-        }
-    }
-    cv::medianBlur(disp8, disp8, filter_size);
-}
-
-cv::Mat SemiGlobalMatching::getDisparity8() const {
-    return disp8.clone();
-}
-
-cv::Mat SemiGlobalMatching::getDisparityRaw() const {
-    return dispRaw.clone();
 }
