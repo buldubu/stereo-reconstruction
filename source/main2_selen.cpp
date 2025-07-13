@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/features2d.hpp>
@@ -7,6 +7,11 @@
 #include <fstream>
 #include <set>
 
+// #include "SemiGlobalMatching.h" 
+
+
+// func prot.
+cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDisparity, int maxDisparity, int blockSize);
 
 
 struct StereoCalibrationParams {
@@ -377,10 +382,10 @@ const bool USE_GRAYSCALE = false;
 int main(int argc, const char* argv[])
 {
 
-    std::string outputName = std::string("C:\\Users\\HP_Victus\\Desktop\\3D__Scanning\\3D__Scanning\\x64\\Release\\outputs\\") + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
-    // Load data C:\Users\HP_Victus\Desktop\3D__Scanning\3D__Scanning\x64\Release
-    cv::Mat imgL = cv::imread("C:\\Users\\HP_Victus\\Desktop\\3D__Scanning\\3D__Scanning\\x64\\Release\\Data\\Motorcycle-imperfect\\im0.png", cv::IMREAD_COLOR);
-    cv::Mat imgR = cv::imread("C:\\Users\\HP_Victus\\Desktop\\3D__Scanning\\3D__Scanning\\x64\\Release\\Data\\Motorcycle-imperfect\\im1.png", cv::IMREAD_COLOR);
+    std::string outputName = std::string("../outputs/") + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
+    // Load data
+    cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
+    cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
 
     if (USE_GRAYSCALE) {
         cv::cvtColor(imgL, imgL, cv::COLOR_BGR2GRAY);
@@ -553,22 +558,11 @@ int main(int argc, const char* argv[])
         cv::cvtColor(imgRRect, imgRGray, cv::COLOR_BGR2GRAY);
     }
 
+    int minDisparity = -32;
+    int maxDisparity = 256;
     int blockSize = 9;
-    int numDisparities = 288;
-    cv::Ptr<cv::StereoSGBM> sgbm = cv::StereoSGBM::create(0, numDisparities, blockSize);
 
-    sgbm->setBlockSize(blockSize);
-    sgbm->setMinDisparity(0);
-    sgbm->setNumDisparities(numDisparities);
-    sgbm->setP1(8 * imgLGray.channels() * blockSize * blockSize);
-    sgbm->setP2(32 * imgLGray.channels() * blockSize * blockSize);
-    sgbm->setMode(cv::StereoSGBM::MODE_SGBM_3WAY);
-    sgbm->setSpeckleWindowSize(100);
-    sgbm->setSpeckleRange(32);
-    sgbm->setUniquenessRatio(10);
-    sgbm->setDisp12MaxDiff(1);
-    cv::Mat disp;
-    sgbm->compute(imgLGray, imgRGray, disp);
+    cv::Mat disp = computeDisparitySAD(imgLGray, imgRGray, minDisparity, maxDisparity, blockSize);
 
     cv::Mat dispFloat;
     disp.convertTo(dispFloat, CV_32F, 1.0 / 16.0);
@@ -582,20 +576,29 @@ int main(int argc, const char* argv[])
         }
     }
 
-
     cv::Mat dispVis;
     cv::normalize(dispFloat, dispVis, 0, 255, cv::NORM_MINMAX, CV_8U);
     cv::imwrite(outputName + "disparity_map.jpg", dispVis);
 
     cv::Mat dispColor;
     cv::applyColorMap(dispVis, dispColor, cv::COLORMAP_JET);
-    cv::imwrite(outputName + "colored_disp.jpg", dispColor);
+    cv::imwrite(outputName + "disparity_map_color.jpg", dispColor);
 
+    // Q matrix based on calib.txt
+    double baseline = 193.001;  
+    Q = (cv::Mat_<double>(4,4) << 
+        1, 0, 0, -cxL,
+        0, 1, 0, -cy,
+        0, 0, 0, fx,
+        0, 0, 1.0 / baseline, (cxR - cxL) / baseline); 
+
+    // 3D projection
     cv::Mat depthMap;
     cv::reprojectImageTo3D(dispFloat, depthMap, Q);
 
+
     std::vector<cv::Mat> xyz;
-    cv::split(depthMap, xyz); // xyz[2] = z (depth)
+    cv::split(depthMap, xyz); 
 
     // Write to PLY 
     std::ofstream out(outputName + "pointcloud.ply");
@@ -684,8 +687,85 @@ int main(int argc, const char* argv[])
             }
         }
     }
-    objFile.close();
+    objFile.close(); 
 
     return 0;
 }
 
+cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDisparity, int maxDisparity, int blockSize)
+{
+    CV_Assert(imgL.size() == imgR.size());
+    CV_Assert(imgL.type() == CV_8UC1 && imgR.type() == CV_8UC1);
+
+    const int h = imgL.rows;
+    const int w = imgL.cols;
+    const int halfBlock = blockSize / 2;
+    const int disparityRange = maxDisparity - minDisparity + 1;
+
+    cv::Mat disparity(h, w, CV_16S, cv::Scalar(-16)); // initialize with invalid disparity
+
+    for (int y = halfBlock; y < h - halfBlock; ++y)
+    {
+        for (int x = halfBlock + maxDisparity; x < w - halfBlock; ++x)
+        {
+            std::vector<int> costs(disparityRange, std::numeric_limits<int>::max());
+
+            for (int d = minDisparity; d <= maxDisparity; ++d)
+            {
+                int sad = 0;
+                bool valid = true;
+
+                for (int i = -halfBlock; i <= halfBlock && valid; ++i)
+                {
+                    for (int j = -halfBlock; j <= halfBlock; ++j)
+                    {
+                        int leftX = x + j;
+                        int rightX = leftX - d;
+
+                        if (rightX < 0 || rightX >= w)
+                        {
+                            valid = false;
+                            break;
+                        }
+
+                        int leftPixel = imgL.at<uchar>(y + i, leftX);
+                        int rightPixel = imgR.at<uchar>(y + i, rightX);
+                        sad += std::abs(leftPixel - rightPixel);
+                    }
+                }
+
+                if (valid)
+                    costs[d - minDisparity] = sad;
+            }
+
+            int bestD = 0;
+            int minSAD = std::numeric_limits<int>::max();
+            for (int d = 0; d < disparityRange; ++d)
+            {
+                if (costs[d] < minSAD)
+                {
+                    minSAD = costs[d];
+                    bestD = d;
+                }
+            }
+
+            float disp = static_cast<float>(bestD);
+            if (bestD > 0 && bestD < disparityRange - 1)
+            {
+                int c0 = costs[bestD - 1];
+                int c1 = costs[bestD];
+                int c2 = costs[bestD + 1];
+                int denom = 2 * (c0 + c2 - 2 * c1);
+                if (denom != 0)
+                    disp += static_cast<float>(c0 - c2) / denom;
+            }
+
+            disparity.at<short>(y, x) = static_cast<short>(disp * 16); // 16x scale
+        }
+    }
+
+    // Median filter to reduce noise
+    cv::medianBlur(disparity, disparity, 3);
+
+    return disparity;
+}
