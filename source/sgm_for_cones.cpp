@@ -6,12 +6,9 @@
 #include <opencv2/imgproc.hpp>
 #include <fstream>
 #include <set>
+#include "SemiGlobalMatching.h" 
+#include "utils.cpp"
 
-// #include "SemiGlobalMatching.h" 
-
-
-// func prot.
-cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDisparity, int maxDisparity, int blockSize);
 
 
 struct StereoCalibrationParams {
@@ -384,35 +381,35 @@ int main(int argc, const char* argv[])
 
     std::string outputName = std::string("../outputs/") + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
     // Load data
-    cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
-    cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
-
+    cv::Mat imgL = cv::imread("../Data/Motorcycle-imperfect/im2.png", cv::IMREAD_COLOR);
+    cv::Mat imgR = cv::imread("../Data/Motorcycle-imperfect/im6.png", cv::IMREAD_COLOR);
+    
     if (USE_GRAYSCALE) {
         cv::cvtColor(imgL, imgL, cv::COLOR_BGR2GRAY);
         cv::cvtColor(imgR, imgR, cv::COLOR_BGR2GRAY);
     }
-
-
-    StereoCalibrationParams calib;
-
-    double fx = calib.fx;
-    double fy = calib.fy;
-    double cxL = calib.cxL;
-    double cxR = calib.cxR;
-    double cy = calib.cy;
-
+   
+    double fx = 3997.684;
+    double cxL = 1176.728;
+    double cxR = 1307.839;
+    double cy = 1011.728;
+    double baseline = 193.001; 
 
     // Q matrix based on calib.txt
-    cv::Mat Q;
+    cv::Mat Q = (cv::Mat_<double>(4,4) << 
+        1, 0, 0, -cxL,
+        0, 1, 0, -cy,
+        0, 0, 0, fx,
+        0, 0, 1.0 / baseline, (cxR - cxL) / baseline);   //  0, 0, -1.0 / baseline, (cxL - cxR) / baseline)
 
     // hard-coded from the calib file
-    cv::Mat K1 = (cv::Mat_<double>(3, 3) << fx, 0, cxL,
-        0, fx, cy,
-        0, 0, 1);
-    cv::Mat K2 = (cv::Mat_<double>(3, 3) << fx, 0, cxR,
-        0, fx, cy,
-        0, 0, 1);
-
+    cv::Mat K1 = (cv::Mat_<double>(3,3) << fx, 0, cxL,
+                                       0, fx, cy,
+                                       0, 0, 1);
+    cv::Mat K2 = (cv::Mat_<double>(3,3) << fx, 0, cxR,
+                                       0, fx, cy,
+                                       0, 0, 1);
+   
     // detect & match features on the original images
     cv::Ptr<cv::SIFT> siftRaw = cv::SIFT::create();
     std::vector<cv::KeyPoint> kptsL_raw, kptsR_raw;
@@ -425,16 +422,11 @@ int main(int argc, const char* argv[])
     std::vector<std::vector<cv::DMatch>> knnMatches_raw;
     matcher_raw->knnMatch(descL_raw, descR_raw, knnMatches_raw, 2);
 
-    const float ratioThresh = 0.25f;
-    const float maxDescriptorDist = 70.0f;
-
+    const float ratioThresh = 0.2f;
     std::vector<cv::DMatch> goodMatches_raw;
-    for (const auto& m : knnMatches_raw) {
-        if (m.size() < 2) continue;
-        if (m[0].distance < ratioThresh * m[1].distance && m[0].distance < maxDescriptorDist) {
+    for (const auto& m : knnMatches_raw)
+        if (m[0].distance < ratioThresh * m[1].distance)
             goodMatches_raw.push_back(m[0]);
-        }
-    }
 
     std::vector<cv::Point2f> ptsL, ptsR;
     for (const auto& m : goodMatches_raw) {
@@ -442,70 +434,14 @@ int main(int argc, const char* argv[])
         ptsR.push_back(kptsR_raw[m.trainIdx].pt);
     }
 
-    cv::Mat F;
-    std::vector<cv::Point2f> inliersL, inliersR;
-
-    //F = estimateFundamentalMatrix(inliersL, inliersR);
-    std::vector<uchar> inlierMask;
-    F = estimateFundamentalMatrixRANSAC(ptsL, ptsR, inlierMask);
-    inliersL.clear();
-    inliersR.clear();
-    for (int i = 0; i < ptsL.size(); ++i) {
-        if (!inlierMask[i]) continue;
-
-        const cv::Point2f& pt1 = ptsL[i];
-        const cv::Point2f& pt2 = ptsR[i];
-
-        cv::Mat x1 = (cv::Mat_<double>(3, 1) << pt1.x, pt1.y, 1.0);
-        cv::Mat l2 = F * x1;  // epipolar line in right image: ax + by + c = 0
-
-        double a = l2.at<double>(0);
-        double b = l2.at<double>(1);
-        double c = l2.at<double>(2);
-
-        double dist = std::abs(a * pt2.x + b * pt2.y + c) / std::sqrt(a * a + b * b);
-
-        // ✅ Filter outliers using epipolar distance threshold
-        if (dist < 1.5) { // you can tune this value
-            inliersL.push_back(pt1);
-            inliersR.push_back(pt2);
-        }
-    }
-
-
-    cv::Mat E = K2.t() * F * K1;
-    cv::Mat R, T;
-    recoverPoseCustom(E, inliersL, inliersR, K1, R, T);
-
-
-    cv::Mat distCoeffs1 = cv::Mat::zeros(5, 1, CV_64F);
-    cv::Mat distCoeffs2 = cv::Mat::zeros(5, 1, CV_64F);
-    cv::Mat R1, R2, P1, P2;
-    cv::Size imageSize = imgL.size();
-
-
-    computeStereoRectification(
-        K1, distCoeffs1,
-        K2, distCoeffs2,
-        imageSize, R, T,
-        R1, R2, P1, P2, Q);
-
+    //  estimate the fundamental matrix with RANSAC and reject outliers
+    cv::Mat maskF;
+    cv::Mat F = cv::findFundamentalMat(ptsL, ptsR, cv::FM_RANSAC, 3.0, 0.99, maskF);
 
     cv::Mat imgLRect, imgRRect;
-    cv::Mat map1x, map1y, map2x, map2y;
 
-
-    computeRectificationMap(K1, R1, P1, imageSize, map1x, map1y);
-    computeRectificationMap(K2, R2, P2, imageSize, map2x, map2y);
-
-
-    std::cout << "map1x.at<float>(0,0): " << map1x.at<float>(0, 0) << std::endl;
-    std::cout << "map1y.at<float>(0,0): " << map1y.at<float>(0, 0) << std::endl;
-
-
-    remapBilinear(imgL, imgLRect, map1x, map1y);
-    remapBilinear(imgR, imgRRect, map2x, map2y);
-
+    imgLRect = imgL.clone();
+    imgRRect = imgR.clone(); 
 
     cv::imwrite(outputName + "rectified_left.jpg", imgLRect);
     cv::imwrite(outputName + "rectified_right.jpg", imgRRect);
@@ -558,88 +494,42 @@ int main(int argc, const char* argv[])
         cv::cvtColor(imgRRect, imgRGray, cv::COLOR_BGR2GRAY);
     }
 
-    int minDisparity = -32;
-    int maxDisparity = 256;
-    int blockSize = 9;
 
-    cv::Mat disp = computeDisparitySAD(imgLGray, imgRGray, minDisparity, maxDisparity, blockSize);
+    // Compute disparity
+    SemiGlobalMatching sgm(imgLGray, imgRGray, 64, 5, 8, 100, 1.0);
+    sgm.SGM_process();
+    cv::Mat dispFloat = sgm.get_disparity_float();
 
-    cv::Mat dispFloat;
-    disp.convertTo(dispFloat, CV_32F, 1.0 / 16.0);
+    // Smooth disparity
+    cv::GaussianBlur(dispFloat, dispFloat, cv::Size(5, 5), 1.5);
 
-    for (int y = 0; y < dispFloat.rows; ++y) {
-        for (int x = 0; x < dispFloat.cols; ++x) {
-            float d = dispFloat.at<float>(y, x);
-            if (d <= 0 || d > 256 || std::isnan(d)) {
-                dispFloat.at<float>(y, x) = 0.0f;  // mark as invalid
-            }
-        }
-    }
+    // Mask invalid disparities
+    cv::Mat dispMask = (dispFloat > 1.0f) & (dispFloat < 128.0f);
+    cv::Mat dispFiltered;
+    dispFloat.copyTo(dispFiltered, dispMask);
 
-    cv::Mat dispVis;
-    cv::normalize(dispFloat, dispVis, 0, 255, cv::NORM_MINMAX, CV_8U);
-    cv::imwrite(outputName + "disparity_map.jpg", dispVis);
+     // Q matrix based on calib.txt
+    //double baseline = 193.001;  
+    Q.at<double>(3, 2) = 1.0 / baseline;
+    Q.at<double>(3, 3) = (cxR - cxL) / baseline;
 
-    cv::Mat dispColor;
-    cv::applyColorMap(dispVis, dispColor, cv::COLORMAP_JET);
-    cv::imwrite(outputName + "disparity_map_color.jpg", dispColor);
-
-    // Q matrix based on calib.txt
-    double baseline = 193.001;  
-    Q = (cv::Mat_<double>(4,4) << 
-        1, 0, 0, -cxL,
-        0, 1, 0, -cy,
-        0, 0, 0, fx,
-        0, 0, 1.0 / baseline, (cxR - cxL) / baseline); 
-
-    // 3D projection
+    // Reproject to 3D
     cv::Mat depthMap;
-    cv::reprojectImageTo3D(dispFloat, depthMap, Q);
+    manualReprojectTo3D(dispFiltered, depthMap, Q);
 
+    // Save disparity maps
+    cv::Mat dispU8;
+    dispFiltered.convertTo(dispU8, CV_8U, 255.0 / 128.0);
+    cv::imwrite(outputName + "cones_disparity_map.jpg", dispU8);
+    cv::Mat dispColor;
+    cv::applyColorMap(dispU8, dispColor, cv::COLORMAP_JET);
+    cv::imwrite(outputName + "cones_disparity_map_color.jpg", dispColor);
 
-    std::vector<cv::Mat> xyz;
-    cv::split(depthMap, xyz); 
-
-    // Write to PLY 
-    std::ofstream out(outputName + "pointcloud.ply");
-    out << "ply\nformat ascii 1.0\n";
-
-    // Count valid points
-    int validPoints = 0;
-    for (int y = 0; y < depthMap.rows; ++y) {
-        for (int x = 0; x < depthMap.cols; ++x) {
-            float d = dispFloat.at<float>(y, x);
-            if (d > 0)
-                ++validPoints;
-        }
-    }
-
-    // write header
-    out << "element vertex " << validPoints << "\n";
-    out << "property float x\nproperty float y\nproperty float z\n";
-    out << "property uchar red\nproperty uchar green\nproperty uchar blue\n"; // uncomment for color
-    out << "end_header\n";
-
-    // write points 
-    for (int y = 0; y < depthMap.rows; ++y) {
-        for (int x = 0; x < depthMap.cols; ++x) {
-            float d = dispFloat.at<float>(y, x);
-            if (d <= 0)
-                continue;
-
-            cv::Vec3f point = depthMap.at<cv::Vec3f>(y, x);
-
-            cv::Vec3b color = imgLRect.at<cv::Vec3b>(y, x);
-            out << point[0] << " " << point[1] << " " << point[2] << " "
-                << (int)color[2] << " " << (int)color[1] << " " << (int)color[0] << "\n";
-        }
-    }
-
-    out.close();
-
+    // Write point cloud
+    writePointCloudPLY(dispFiltered, depthMap, imgLRect, outputName + "cones_pointcloud.ply");
 
     // Mesh generation
-    std::ofstream objFile(outputName + "mesh.obj");
+    std::ofstream objFile(outputName + "cones_mesh.obj");
     int height = depthMap.rows;
     int width = depthMap.cols;
     std::vector<int> valid_map(height * width, -1);
@@ -692,80 +582,7 @@ int main(int argc, const char* argv[])
     return 0;
 }
 
-cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDisparity, int maxDisparity, int blockSize)
-{
-    CV_Assert(imgL.size() == imgR.size());
-    CV_Assert(imgL.type() == CV_8UC1 && imgR.type() == CV_8UC1);
 
-    const int h = imgL.rows;
-    const int w = imgL.cols;
-    const int halfBlock = blockSize / 2;
-    const int disparityRange = maxDisparity - minDisparity + 1;
 
-    cv::Mat disparity(h, w, CV_16S, cv::Scalar(-16)); // initialize with invalid disparity
 
-    for (int y = halfBlock; y < h - halfBlock; ++y)
-    {
-        for (int x = halfBlock + maxDisparity; x < w - halfBlock; ++x)
-        {
-            std::vector<int> costs(disparityRange, std::numeric_limits<int>::max());
 
-            for (int d = minDisparity; d <= maxDisparity; ++d)
-            {
-                int sad = 0;
-                bool valid = true;
-
-                for (int i = -halfBlock; i <= halfBlock && valid; ++i)
-                {
-                    for (int j = -halfBlock; j <= halfBlock; ++j)
-                    {
-                        int leftX = x + j;
-                        int rightX = leftX - d;
-
-                        if (rightX < 0 || rightX >= w)
-                        {
-                            valid = false;
-                            break;
-                        }
-
-                        int leftPixel = imgL.at<uchar>(y + i, leftX);
-                        int rightPixel = imgR.at<uchar>(y + i, rightX);
-                        sad += std::abs(leftPixel - rightPixel);
-                    }
-                }
-
-                if (valid)
-                    costs[d - minDisparity] = sad;
-            }
-
-            int bestD = 0;
-            int minSAD = std::numeric_limits<int>::max();
-            for (int d = 0; d < disparityRange; ++d)
-            {
-                if (costs[d] < minSAD)
-                {
-                    minSAD = costs[d];
-                    bestD = d;
-                }
-            }
-
-            float disp = static_cast<float>(bestD);
-            if (bestD > 0 && bestD < disparityRange - 1)
-            {
-                int c0 = costs[bestD - 1];
-                int c1 = costs[bestD];
-                int c2 = costs[bestD + 1];
-                int denom = 2 * (c0 + c2 - 2 * c1);
-                if (denom != 0)
-                    disp += static_cast<float>(c0 - c2) / denom;
-            }
-
-            disparity.at<short>(y, x) = static_cast<short>(disp * 16); // 16x scale
-        }
-    }
-
-    // Median filter to reduce noise
-    cv::medianBlur(disparity, disparity, 3);
-
-    return disparity;
-}
