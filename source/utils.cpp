@@ -75,70 +75,99 @@ cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDis
     const int halfBlock = blockSize / 2;
     const int disparityRange = maxDisparity - minDisparity + 1;
 
-    cv::Mat disparity(h, w, CV_16S, cv::Scalar(-16)); // initialize with invalid disparity
+    cv::Mat disparity(h, w, CV_16S, cv::Scalar(-16));
 
-    for (int y = halfBlock; y < h - halfBlock; ++y)
+    cv::parallel_for_(cv::Range(halfBlock, h - halfBlock), [&](const cv::Range& range)
     {
-        for (int x = halfBlock + maxDisparity; x < w - halfBlock; ++x)
+        std::vector<int> costs(disparityRange);
+        
+        for (int y = range.start; y < range.end; ++y)
         {
-            std::vector<int> costs(disparityRange, std::numeric_limits<int>::max());
-
-            for (int d = minDisparity; d <= maxDisparity; ++d)
+            for (int x = halfBlock + maxDisparity; x < w - halfBlock; ++x)
             {
-                int sad = 0;
-                bool valid = true;
+                std::fill(costs.begin(), costs.end(), std::numeric_limits<int>::max());
 
-                for (int i = -halfBlock; i <= halfBlock && valid; ++i)
+                for (int d = minDisparity; d <= maxDisparity; ++d)
                 {
-                    for (int j = -halfBlock; j <= halfBlock; ++j)
+                    int sad = 0;
+                    bool valid = true;
+
+                    if (blockSize <= 7)
                     {
-                        int leftX = x + j;
-                        int rightX = leftX - d;
-
-                        if (rightX < 0 || rightX >= w)
+                        for (int i = -halfBlock; i <= halfBlock && valid; ++i)
                         {
-                            valid = false;
-                            break;
-                        }
+                            const uchar* leftRow = imgL.ptr<uchar>(y + i);
+                            const uchar* rightRow = imgR.ptr<uchar>(y + i);
+                            
+                            for (int j = -halfBlock; j <= halfBlock; ++j)
+                            {
+                                int leftX = x + j;
+                                int rightX = leftX - d;
 
-                        int leftPixel = imgL.at<uchar>(y + i, leftX);
-                        int rightPixel = imgR.at<uchar>(y + i, rightX);
-                        sad += std::abs(leftPixel - rightPixel);
+                                if (rightX < 0 || rightX >= w)
+                                {
+                                    valid = false;
+                                    break;
+                                }
+
+                                sad += std::abs(leftRow[leftX] - rightRow[rightX]);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = -halfBlock; i <= halfBlock && valid; ++i)
+                        {
+                            for (int j = -halfBlock; j <= halfBlock; ++j)
+                            {
+                                int leftX = x + j;
+                                int rightX = leftX - d;
+
+                                if (rightX < 0 || rightX >= w)
+                                {
+                                    valid = false;
+                                    break;
+                                }
+
+                                int leftPixel = imgL.at<uchar>(y + i, leftX);
+                                int rightPixel = imgR.at<uchar>(y + i, rightX);
+                                sad += std::abs(leftPixel - rightPixel);
+                            }
+                        }
+                    }
+
+                    if (valid)
+                        costs[d - minDisparity] = sad;
+                }
+
+                int bestD = 0;
+                int minSAD = std::numeric_limits<int>::max();
+                for (int d = 0; d < disparityRange; ++d)
+                {
+                    if (costs[d] < minSAD)
+                    {
+                        minSAD = costs[d];
+                        bestD = d;
                     }
                 }
 
-                if (valid)
-                    costs[d - minDisparity] = sad;
-            }
-
-            int bestD = 0;
-            int minSAD = std::numeric_limits<int>::max();
-            for (int d = 0; d < disparityRange; ++d)
-            {
-                if (costs[d] < minSAD)
+                float disp = static_cast<float>(bestD + minDisparity);
+                if (bestD > 0 && bestD < disparityRange - 1 && 
+                    costs[bestD - 1] != std::numeric_limits<int>::max() &&
+                    costs[bestD + 1] != std::numeric_limits<int>::max())
                 {
-                    minSAD = costs[d];
-                    bestD = d;
+                    int c0 = costs[bestD - 1];
+                    int c1 = costs[bestD];
+                    int c2 = costs[bestD + 1];
+                    int denom = 2 * (c0 + c2 - 2 * c1);
+                    if (denom != 0)
+                        disp += static_cast<float>(c0 - c2) / denom;
                 }
-            }
 
-            float disp = static_cast<float>(bestD);
-            if (bestD > 0 && bestD < disparityRange - 1)
-            {
-                int c0 = costs[bestD - 1];
-                int c1 = costs[bestD];
-                int c2 = costs[bestD + 1];
-                int denom = 2 * (c0 + c2 - 2 * c1);
-                if (denom != 0)
-                    disp += static_cast<float>(c0 - c2) / denom;
+                disparity.at<short>(y, x) = static_cast<short>(disp * 16);
             }
-
-            disparity.at<short>(y, x) = static_cast<short>(disp * 16); // 16x scale
         }
-    }
-
-    // Median filter to reduce noise
-    cv::medianBlur(disparity, disparity, 3);
+    });
 
     return disparity;
 } 
