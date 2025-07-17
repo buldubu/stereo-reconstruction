@@ -544,7 +544,7 @@ int main(int argc, const char* argv[])
     // save keypoints matches
     cv::imwrite(outputName + "sift_good_matches.jpg", imgMatches);
 
-    // disparity map calculation
+    // Disparity map calculation
     cv::Mat imgLGray, imgRGray;
     if (USE_GRAYSCALE) {
         imgLGray = imgLRect;
@@ -560,43 +560,56 @@ int main(int argc, const char* argv[])
     cv::resize(imgLGray, imgLGray, cv::Size(), scale, scale);
     cv::resize(imgRGray, imgRGray, cv::Size(), scale, scale);
 
-    // Compute disparity
-    SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 8, 100, 1.0);
+    SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 15, 150, 10); // lower L-R threshold
     sgm.SGM_process();
     cv::Mat dispFloat = sgm.get_disparity_float();
 
-    // Smooth disparity
-    cv::GaussianBlur(dispFloat, dispFloat, cv::Size(5, 5), 1.5);
+    cv::Mat disp16;
+    dispFloat.convertTo(disp16, CV_16S, 16.0); 
+    int newSpeckleSize = 50; 
+    int newMaxDiff = 32;           
+    cv::filterSpeckles(disp16, 0, newSpeckleSize, newMaxDiff);
+
+    disp16.convertTo(dispFloat, CV_32F, 1.0 / 16.0);
+
+    cv::Mat dispBilateral;
+    cv::bilateralFilter(dispFloat, dispBilateral, 9, 75, 75);
+    dispFloat = dispBilateral.clone(); 
 
     // Mask invalid disparities
-    cv::Mat dispMask = (dispFloat > 1.0f) & (dispFloat < 128.0f);
+    cv::Mat dispMask = (dispFloat > 0.1f) & (dispFloat < 128.0f);
     cv::Mat dispFiltered;
     dispFloat.copyTo(dispFiltered, dispMask);
 
-    double  baseline_meters = 193.001;
+    // Scale Q matrix (due to image resizing)
+    double baseline_meters = 193.001;
     cv::Mat Q_scaled = Q.clone();
     Q_scaled.at<double>(0, 3) *= scale;  // -cx
     Q_scaled.at<double>(1, 3) *= scale;  // -cy
     Q_scaled.at<double>(2, 3) *= scale;  // fx
-    Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;  
+    Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;
     Q_scaled.at<double>(3, 3) = -(cxL - cxR) / baseline_meters;
 
-    // Reproject to 3D
+   // Reproject to 3D
     cv::Mat depthMap;
     manualReprojectTo3D(dispFiltered, depthMap, Q_scaled);
 
-    // Resize color image
+    // Resize color image for 3D texture
     cv::Mat imgL_resized;
     cv::resize(imgL, imgL_resized, cv::Size(), scale, scale);
 
-    // Save disparity maps
+    // Normalize and visualize disparity
     cv::Mat dispU8;
-    dispFiltered.convertTo(dispU8, CV_8U, 255.0 / 128.0);
-    cv::imwrite(outputName + "sgd_disparity_map.jpg", dispU8);
+    cv::normalize(dispFiltered, dispU8, 0, 255, cv::NORM_MINMAX, CV_8U);
     cv::Mat dispColor;
     cv::applyColorMap(dispU8, dispColor, cv::COLORMAP_JET);
+
+
+    // Save results
+    cv::imwrite(outputName + "sgd_disparity_map.jpg", dispU8);
     cv::imwrite(outputName + "sgd_disparity_map_color.jpg", dispColor);
 
+    
     // Write point cloud
     writePointCloudPLY(dispFiltered, depthMap, imgL_resized, outputName + "sgd_pointcloud.ply");
 
@@ -653,7 +666,6 @@ int main(int argc, const char* argv[])
 
     return 0;
 }
-
 
 
 
