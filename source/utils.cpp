@@ -1,10 +1,66 @@
 #pragma once
 #include <opencv2/core.hpp>
 
-void manualReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::Mat& Q) {
+void vectorizedReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::Mat& Q) {
+
+    int rows = disp.rows;
+    int cols = disp.cols;
+
+    cv::Mat xMat(rows, cols, CV_32F);
+    cv::Mat yMat(rows, cols, CV_32F);
+    for (int y = 0; y < rows; ++y) {
+        float* xRow = xMat.ptr<float>(y);
+        float* yRow = yMat.ptr<float>(y);
+        for (int x = 0; x < cols; ++x) {
+            xRow[x] = static_cast<float>(x);
+            yRow[x] = static_cast<float>(y);
+        }
+    }
+
+    cv::Mat ones = cv::Mat::ones(rows, cols, CV_32F);
+    std::vector<cv::Mat> vecs = { xMap, yMap, disp, ones };
+    cv::Mat vec4;
+    cv::merge(vecs, vec4);
+
+    cv::Mat vec4_reshaped = vec4.reshape(1, rows * cols);
+    cv::Mat vec4d;
+    vec4_reshaped.convertTo(vec4d, CV_64F);
+
+    cv::Mat X = vec4d * Q.t();
+
+    cv::Mat Xw = X.col(0) / X.col(3);
+    cv::Mat Yw = X.col(1) / X.col(3);
+    cv::Mat Zw = X.col(2) / X.col(3);
+
+    cv::Mat Xwf, Ywf, Zwf;
+    Xw.convertTo(Xwf, CV_32F);
+    Yw.convertTo(Ywf, CV_32F);
+    Zw.convertTo(Zwf, CV_32F);
+
+    std::vector<cv::Mat> XYZ = { Xwf, Ywf, Zwf };
+    cv::Mat merged = cv::Mat(Xwf.rows, 3, CV_32F);
+    cv::merge(XYZ, merged);
+
+    depthMap = merged.reshape(3, rows);
+
+    // cv::Mat validMask = (disp > 0.0f) & (disp == disp);
+    // for (int y = 0; y < rows; ++y) {
+    //     for (int x = 0; x < cols; ++x) {
+    //         if (!validMask.at<uchar>(y, x)) {
+    //             depthMap.at<cv::Vec3f>(y, x) = cv::Vec3f(0, 0, 0);
+    //         }
+    //     }
+    // }
+}
+
+void manualReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::Mat& Q, const bool vectorized = false) {
     // std::cout << "Disp map size: " << disp.size() << std::endl;
     // std::cout << "Q matrix: " << Q << std::endl;
     // std::cout << "Q matrix size: " << Q.size() << std::endl;
+    if (vectorized) {
+        vectorizedReprojectTo3D(disp, depthMap, Q);
+        return;
+    }
     depthMap = cv::Mat(disp.size(), CV_32FC3);
 
     for (int y = 0; y < disp.rows; ++y) {
@@ -22,7 +78,7 @@ void manualReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::Mat& 
             vec(2) = static_cast<double>(d);
             vec(3) = 1.0;
 
-            cv::Mat X = Q * vec;  // 4x1
+            cv::Mat X = Q * vec;
 
             float Xw = static_cast<float>(X.at<double>(0) / X.at<double>(3));
             float Yw = static_cast<float>(X.at<double>(1) / X.at<double>(3));
