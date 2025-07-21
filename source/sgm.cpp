@@ -10,19 +10,19 @@
 #include "utils.cpp"
 
 
+const float scale = 0.5f;
 
 struct StereoCalibrationParams {
-    double fx = 3997.684;
-    double fy = 3997.684;        // Assuming square pixels
-    double cxL = 1176.728;
-    double cy = 1011.728;
-    double cxR = 1307.839;
+    double fx = 3979.911 * scale;
+    double fy = 3979.911 * scale;
+    double cxL = 1244.772 * scale;
+    double cxR = 1369.115 * scale;
+    double cy = 1019.507 * scale;
 
     // Distortion (assumed zero for now)
     cv::Mat distCoeffs1 = cv::Mat::zeros(5, 1, CV_64F);
     cv::Mat distCoeffs2 = cv::Mat::zeros(5, 1, CV_64F);
 };
-
 
 
 // Clamp utility
@@ -384,11 +384,14 @@ int main(int argc, const char* argv[])
     cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
     cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
 
-    if (USE_GRAYSCALE) {
-        cv::cvtColor(imgL, imgL, cv::COLOR_BGR2GRAY);
-        cv::cvtColor(imgR, imgR, cv::COLOR_BGR2GRAY);
+    if (imgL.empty() || imgR.empty()) {
+        std::cerr << "Cannot upload images!" << std::endl;
+        return -1;
     }
 
+    // scale images
+    cv::resize(imgL, imgL, cv::Size(), scale, scale);
+    cv::resize(imgR, imgR, cv::Size(), scale, scale);
 
     StereoCalibrationParams calib;
 
@@ -462,7 +465,6 @@ int main(int argc, const char* argv[])
 
         double dist = std::abs(a * pt2.x + b * pt2.y + c) / std::sqrt(a * a + b * b);
 
-        // ✅ Filter outliers using epipolar distance threshold
         if (dist < 1.5) { // you can tune this value
             inliersL.push_back(pt1);
             inliersR.push_back(pt2);
@@ -555,26 +557,22 @@ int main(int argc, const char* argv[])
         cv::cvtColor(imgRRect, imgRGray, cv::COLOR_BGR2GRAY);
     }
 
-    // Resize
-    float scale = 0.5f;
-    cv::resize(imgLGray, imgLGray, cv::Size(), scale, scale);
-    cv::resize(imgRGray, imgRGray, cv::Size(), scale, scale);
 
     SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 15, 150, 10); // lower L-R threshold
     sgm.SGM_process();
     cv::Mat dispFloat = sgm.get_disparity_float();
 
     cv::Mat disp16;
-    dispFloat.convertTo(disp16, CV_16S, 16.0); 
-    int newSpeckleSize = 50; 
-    int newMaxDiff = 32;           
+    dispFloat.convertTo(disp16, CV_16S, 16.0);
+    int newSpeckleSize = 50;
+    int newMaxDiff = 32;
     cv::filterSpeckles(disp16, 0, newSpeckleSize, newMaxDiff);
 
     disp16.convertTo(dispFloat, CV_32F, 1.0 / 16.0);
 
     cv::Mat dispBilateral;
     cv::bilateralFilter(dispFloat, dispBilateral, 9, 75, 75);
-    dispFloat = dispBilateral.clone(); 
+    dispFloat = dispBilateral.clone();
 
     // Mask invalid disparities
     cv::Mat dispMask = (dispFloat > 0.1f) & (dispFloat < 128.0f);
@@ -584,19 +582,12 @@ int main(int argc, const char* argv[])
     // Scale Q matrix (due to image resizing)
     double baseline_meters = 193.001;
     cv::Mat Q_scaled = Q.clone();
-    Q_scaled.at<double>(0, 3) *= scale;  // -cx
-    Q_scaled.at<double>(1, 3) *= scale;  // -cy
-    Q_scaled.at<double>(2, 3) *= scale;  // fx
     Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;
     Q_scaled.at<double>(3, 3) = -(cxL - cxR) / baseline_meters;
 
-   // Reproject to 3D
+    // Reproject to 3D
     cv::Mat depthMap;
     manualReprojectTo3D(dispFiltered, depthMap, Q_scaled);
-
-    // Resize color image for 3D texture
-    cv::Mat imgL_resized;
-    cv::resize(imgL, imgL_resized, cv::Size(), scale, scale);
 
     // Normalize and visualize disparity
     cv::Mat dispU8;
@@ -609,60 +600,12 @@ int main(int argc, const char* argv[])
     cv::imwrite(outputName + "sgd_disparity_map.jpg", dispU8);
     cv::imwrite(outputName + "sgd_disparity_map_color.jpg", dispColor);
 
-    
-    // Write point cloud
-    writePointCloudPLY(dispFiltered, depthMap, imgL_resized, outputName + "sgd_pointcloud.ply");
 
-    // Mesh generation
-    std::ofstream objFile(outputName + "sgd_mesh.obj");
-    int height = depthMap.rows;
-    int width = depthMap.cols;
-    std::vector<int> valid_map(height * width, -1);
-    int vertex_idx = 1;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float d = dispFloat.at<float>(y, x);
-            if (d <= 0)
-                continue;
-            cv::Vec3f point = depthMap.at<cv::Vec3f>(y, x);
-            objFile << "v " << point[0] << " " << point[1] << " " << point[2] << "\n";
-            valid_map[y * width + x] = vertex_idx++;
-        }
-    }
-    float max_z_diff = 5.0f;
-    for (int y = 0; y < height - 1; ++y) {
-        for (int x = 0; x < width - 1; ++x) {
-            int i0 = y * width + x;
-            int i1 = y * width + (x + 1);
-            int i2 = (y + 1) * width + x;
-            int i3 = (y + 1) * width + (x + 1);
-            int vi0 = valid_map[i0];
-            int vi1 = valid_map[i1];
-            int vi2 = valid_map[i2];
-            int vi3 = valid_map[i3];
-            if (vi0 > 0 && vi1 > 0 && vi2 > 0) {
-                float z0 = depthMap.at<cv::Vec3f>(y, x)[2];
-                float z1 = depthMap.at<cv::Vec3f>(y, x + 1)[2];
-                float z2 = depthMap.at<cv::Vec3f>(y + 1, x)[2];
-                if (std::abs(z0 - z1) < max_z_diff &&
-                    std::abs(z0 - z2) < max_z_diff &&
-                    std::abs(z1 - z2) < max_z_diff) {
-                    objFile << "f " << vi0 << " " << vi2 << " " << vi1 << "\n";
-                }
-            }
-            if (vi2 > 0 && vi1 > 0 && vi3 > 0) {
-                float z2 = depthMap.at<cv::Vec3f>(y + 1, x)[2];
-                float z1 = depthMap.at<cv::Vec3f>(y, x + 1)[2];
-                float z3 = depthMap.at<cv::Vec3f>(y + 1, x + 1)[2];
-                if (std::abs(z2 - z1) < max_z_diff &&
-                    std::abs(z2 - z3) < max_z_diff &&
-                    std::abs(z1 - z3) < max_z_diff) {
-                    objFile << "f " << vi2 << " " << vi3 << " " << vi1 << "\n";
-                }
-            }
-        }
-    }
-    objFile.close(); 
+    // Write point cloud
+    writePointCloudPLY(dispFiltered, depthMap, imgL, outputName + "sgd_pointcloud.ply");
+
+    // Write mesh
+    writeMeshFromDepth(dispFloat, depthMap, outputName + "sgd_mesh.obj");
 
     return 0;
 }

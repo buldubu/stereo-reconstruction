@@ -118,7 +118,80 @@ void writePointCloudPLY(const cv::Mat& disparityMap, const cv::Mat& depthMap, co
         }
     }
     out.close();
-    std::cout << "[INFO] Point cloud saved to: " << filename << std::endl;
+    std::cout << "Point cloud saved. " << filename << std::endl;
+}
+
+void writeMeshFromDepth(const cv::Mat& dispFloat,
+    const cv::Mat& depthMap,
+    const std::string& outputObjPath,
+    float max_z_diff = 5.0f)
+{
+    std::ofstream objFile(outputObjPath);
+    if (!objFile.is_open()) {
+        std::cerr << "Error opening file for mesh: " << outputObjPath << std::endl;
+        return;
+    }
+
+    int height = depthMap.rows;
+    int width = depthMap.cols;
+    std::vector<int> valid_map(height * width, -1);
+    int vertex_idx = 1;
+
+    // Write vertices
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            float d = dispFloat.at<float>(y, x);
+            if (d <= 0)
+                continue;
+
+            cv::Vec3f point = depthMap.at<cv::Vec3f>(y, x);
+            objFile << "v " << point[0] << " " << point[1] << " " << point[2] << "\n";
+            valid_map[y * width + x] = vertex_idx++;
+        }
+    }
+
+    // Write faces
+    for (int y = 0; y < height - 1; ++y) {
+        for (int x = 0; x < width - 1; ++x) {
+            int i0 = y * width + x;
+            int i1 = y * width + (x + 1);
+            int i2 = (y + 1) * width + x;
+            int i3 = (y + 1) * width + (x + 1);
+
+            int vi0 = valid_map[i0];
+            int vi1 = valid_map[i1];
+            int vi2 = valid_map[i2];
+            int vi3 = valid_map[i3];
+
+            if (vi0 > 0 && vi1 > 0 && vi2 > 0) {
+                float z0 = depthMap.at<cv::Vec3f>(y, x)[2];
+                float z1 = depthMap.at<cv::Vec3f>(y, x + 1)[2];
+                float z2 = depthMap.at<cv::Vec3f>(y + 1, x)[2];
+
+                if (std::abs(z0 - z1) < max_z_diff &&
+                    std::abs(z0 - z2) < max_z_diff &&
+                    std::abs(z1 - z2) < max_z_diff)
+                {
+                    objFile << "f " << vi0 << " " << vi2 << " " << vi1 << "\n";
+                }
+            }
+
+            if (vi2 > 0 && vi1 > 0 && vi3 > 0) {
+                float z2 = depthMap.at<cv::Vec3f>(y + 1, x)[2];
+                float z1 = depthMap.at<cv::Vec3f>(y, x + 1)[2];
+                float z3 = depthMap.at<cv::Vec3f>(y + 1, x + 1)[2];
+
+                if (std::abs(z2 - z1) < max_z_diff &&
+                    std::abs(z2 - z3) < max_z_diff &&
+                    std::abs(z1 - z3) < max_z_diff)
+                {
+                    objFile << "f " << vi2 << " " << vi3 << " " << vi1 << "\n";
+                }
+            }
+        }
+    }
+    objFile.close();
+    std::cout << "Mesh saved." << std::endl;
 }
 
 cv::Mat computeDisparitySAD(const cv::Mat& imgL, const cv::Mat& imgR, int minDisparity, int maxDisparity, int blockSize)
