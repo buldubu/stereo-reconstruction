@@ -580,7 +580,7 @@ int main(int argc, const char* argv[])
     dispFloat.copyTo(dispFiltered, dispMask);
 
     // Scale Q matrix (due to image resizing)
-    double baseline_meters = 193.001;
+    double baseline_meters = 193.001 * scale;
     cv::Mat Q_scaled = Q.clone();
     Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;
     Q_scaled.at<double>(3, 3) = -(cxL - cxR) / baseline_meters;
@@ -609,7 +609,6 @@ int main(int argc, const char* argv[])
 
     return 0;
 }
-
 
 
 
