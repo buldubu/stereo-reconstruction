@@ -7,23 +7,29 @@
 #include <fstream>
 
 const bool USE_GRAYSCALE = false;
+double scale = 0.5f;
 
 int main(int argc, const char* argv[])
 {
     std::string outputName = std::string("../outputs/") + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
     // Load data
-    cv::Mat imgL = cv::imread("../Data/Motorcycle-imperfect/im0.png", cv::IMREAD_COLOR);
-    cv::Mat imgR = cv::imread("../Data/Motorcycle-imperfect/im1.png", cv::IMREAD_COLOR);
+    cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
+    cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
     
     if (USE_GRAYSCALE) {
         cv::cvtColor(imgL, imgL, cv::COLOR_BGR2GRAY);
         cv::cvtColor(imgR, imgR, cv::COLOR_BGR2GRAY);
     }
-   
-    double fx = 3997.684;
-    double cxL = 1176.728;
-    double cxR = 1307.839;
-    double cy = 1011.728;
+
+    // scale images
+    cv::resize(imgL, imgL, cv::Size(), scale, scale);
+    cv::resize(imgR, imgR, cv::Size(), scale, scale);
+
+
+    double fx = 3997.684 * scale;
+    double cxL = 1176.728 * scale;
+    double cxR = 1307.839 * scale;
+    double cy = 1011.728 * scale;
     double baseline = 193.001; 
 
     // Q matrix based on calib.txt
@@ -156,7 +162,7 @@ int main(int argc, const char* argv[])
     }
 
     int blockSize = 9;
-    int numDisparities = 288;
+    int numDisparities = 192;
     cv::Ptr<cv::StereoSGBM> sgbm = cv::StereoSGBM::create(0, numDisparities, blockSize);
 
     sgbm->setBlockSize(blockSize);
