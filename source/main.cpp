@@ -25,12 +25,13 @@ int main(int argc, const char* argv[])
     cv::resize(imgL, imgL, cv::Size(), scale, scale);
     cv::resize(imgR, imgR, cv::Size(), scale, scale);
 
-
-    double fx = 3997.684 * scale;
-    double cxL = 1176.728 * scale;
-    double cxR = 1307.839 * scale;
-    double cy = 1011.728 * scale;
+    // moto
+    double fx = 3979.911 * scale;
+    double cxL = 1244.772 * scale;
+    double cxR = 1369.115 * scale;
+    double cy = 1019.507 * scale;
     double baseline = 193.001;
+
 
     // Q matrix based on calib.txt
     cv::Mat Q = (cv::Mat_<double>(4, 4) <<

@@ -384,6 +384,7 @@ int main(int argc, const char* argv[])
     cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
     cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
 
+
     if (imgL.empty() || imgR.empty()) {
         std::cerr << "Cannot upload images!" << std::endl;
         return -1;
@@ -558,7 +559,7 @@ int main(int argc, const char* argv[])
     }
 
 
-    SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 15, 150, 10); // lower L-R threshold
+    SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 15, 150, 10);  // lower L-R threshold
     sgm.SGM_process();
     cv::Mat dispFloat = sgm.get_disparity_float();
 
@@ -580,6 +581,7 @@ int main(int argc, const char* argv[])
     dispFloat.copyTo(dispFiltered, dispMask);
 
     // Scale Q matrix (due to image resizing)
+    // double baseline_meters = 193.001; // moto
     double baseline_meters = 193.001;
     cv::Mat Q_scaled = Q.clone();
     Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;
