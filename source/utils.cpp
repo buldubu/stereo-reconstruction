@@ -18,7 +18,7 @@ void vectorizedReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::M
     }
 
     cv::Mat ones = cv::Mat::ones(rows, cols, CV_32F);
-    std::vector<cv::Mat> vecs = { xMap, yMap, disp, ones };
+    std::vector<cv::Mat> vecs = { xMat, yMat, disp, ones };
     cv::Mat vec4;
     cv::merge(vecs, vec4);
 
