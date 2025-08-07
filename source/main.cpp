@@ -123,6 +123,7 @@ int main(int argc, const char* argv[])
 
     // detect & match features on the original images
     cv::Ptr<cv::Feature2D> feature;
+    std::vector<cv::Point2f> ptsL, ptsR;
     int normType;
 
     if(mode == "sift"){
@@ -171,8 +172,6 @@ int main(int argc, const char* argv[])
         for (const auto& m : knnMatches_raw)
             if (m[0].distance < ratioThresh * m[1].distance)
                 goodMatches_raw.push_back(m[0]);
-    
-        std::vector<cv::Point2f> ptsL, ptsR;
         for (const auto& m : goodMatches_raw) {
             ptsL.push_back(kptsL_raw[m.queryIdx].pt);
             ptsR.push_back(kptsR_raw[m.trainIdx].pt);
