@@ -6,6 +6,7 @@
 #include <opencv2/imgproc.hpp>
 #include <fstream>
 #include "utils.cpp"
+#include <filesystem>
 
 const bool USE_GRAYSCALE = false;
 double scale = 0.5f;
@@ -22,7 +23,11 @@ int main(int argc, const char* argv[])
     std::transform(mode.begin(), mode.end(), mode.begin(),[](unsigned char c){ return std::tolower(c); });
 
     std::string outputPath = "../outputs/opencv/" + mode + "/";
-    std::string outputName = outputPath + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
+    if (!std::filesystem::exists(outputPath)) {
+    std::filesystem::create_directories(outputPath);}
+
+    std::string outputName = outputPath + (USE_GRAYSCALE ? "grayscale_" : "rgb_"); 
+
     // Load data
     cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
     cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);

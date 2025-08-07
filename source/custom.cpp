@@ -9,6 +9,7 @@
 #include "SemiGlobalMatching.h" 
 #include "reconstruction.h"
 #include "utils.cpp"
+#include <filesystem>
 
 const float scale = 0.5f;
 const bool USE_GRAYSCALE = false;
@@ -38,7 +39,10 @@ int main(int argc, const char* argv[])
     std::transform(mode.begin(), mode.end(), mode.begin(),[](unsigned char c){ return std::tolower(c); });
 
     std::string outputPath = "../outputs/custom/" + mode + "/";
-    std::string outputName = outputPath + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
+    if (!std::filesystem::exists(outputPath)) {
+    std::filesystem::create_directories(outputPath);}
+
+    std::string outputName = outputPath + (USE_GRAYSCALE ? "grayscale_" : "rgb_");  
 
     // Load data
     cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
