@@ -5,29 +5,78 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <fstream>
-#include <set>
-#include "SemiGlobalMatching.h" 
+#include "utils.cpp"  // Now includes robust functions
 #include "reconstruction.h"
-#include "utils.cpp"
 
-const float scale = 0.5f;
 const bool USE_GRAYSCALE = false;
+double scale = 0.5f;
 
-struct StereoCalibrationParams {
-    double fx = 3979.911 * scale;     
-    double fy = 3979.911 * scale;
-    double cxL = 1244.772 * scale;
-    double cxR = 1369.115 * scale;
-    double cy = 1019.507 * scale;
-
-    cv::Mat distCoeffs1 = cv::Mat::zeros(5, 1, CV_64F);
-    cv::Mat distCoeffs2 = cv::Mat::zeros(5, 1, CV_64F);
+// CLIP match structure
+struct CLIPMatch {
+    cv::Point2f left_point;
+    cv::Point2f right_point;
+    float distance;
+    int left_idx;
+    int right_idx;
 };
 
+// Function to read CLIP matches from file
+std::vector<CLIPMatch> readCLIPMatches(const std::string& filename) {
+    std::vector<CLIPMatch> matches;
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open CLIP matches file: " << filename << std::endl;
+        return matches;
+    }
+
+    int numMatches;
+    file >> numMatches;
+    std::cout << "Reading " << numMatches << " CLIP matches from " << filename << std::endl;
+    matches.reserve(numMatches);
+
+    for (int i = 0; i < numMatches; i++) {
+        CLIPMatch match;
+        file >> match.left_point.x >> match.left_point.y
+            >> match.right_point.x >> match.right_point.y
+            >> match.distance;
+
+        match.left_idx = i;
+        match.right_idx = i;
+        matches.push_back(match);
+    }
+
+    file.close();
+    std::cout << "Successfully loaded " << matches.size() << " CLIP matches" << std::endl;
+    return matches;
+}
+
+// Function to visualize CLIP matches
+void visualizeCLIPMatches(const cv::Mat& imgL, const cv::Mat& imgR,
+    const std::vector<CLIPMatch>& matches, const std::string& outputPath) {
+    // Convert CLIP matches to cv::DMatch format for visualization
+    std::vector<cv::KeyPoint> kptsL, kptsR;
+    std::vector<cv::DMatch> goodMatches;
+
+    for (size_t i = 0; i < matches.size(); i++) {
+        kptsL.push_back(cv::KeyPoint(matches[i].left_point, 1.0f));
+        kptsR.push_back(cv::KeyPoint(matches[i].right_point, 1.0f));
+        goodMatches.push_back(cv::DMatch(i, i, matches[i].distance));
+    }
+
+    // Draw matches
+    cv::Mat imgMatches;
+    cv::drawMatches(imgL, kptsL, imgR, kptsR,
+        goodMatches, imgMatches,
+        cv::Scalar::all(-1), cv::Scalar::all(-1),
+        std::vector<char>(),
+        cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+
+    cv::imwrite(outputPath, imgMatches);
+}
 
 int main(int argc, const char* argv[])
 {
-
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " [sift | brisk | clip]" << std::endl;
         return 1;
@@ -39,34 +88,34 @@ int main(int argc, const char* argv[])
 
     std::string outputName = std::string("../outputs/") + (USE_GRAYSCALE ? "grayscale_" : "rgb_");
     std::string outputPath = std::string("../outputs/");
-
+    
     // Load data
     cv::Mat imgL = cv::imread("../Data/Motorcycle-perfect/im0.png", cv::IMREAD_COLOR);
     cv::Mat imgR = cv::imread("../Data/Motorcycle-perfect/im1.png", cv::IMREAD_COLOR);
 
-
-    if (imgL.empty() || imgR.empty()) {
-        std::cerr << "Cannot upload images!" << std::endl;
-        return -1;
+    if (USE_GRAYSCALE) {
+        cv::cvtColor(imgL, imgL, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(imgR, imgR, cv::COLOR_BGR2GRAY);
     }
 
     // scale images
     cv::resize(imgL, imgL, cv::Size(), scale, scale);
     cv::resize(imgR, imgR, cv::Size(), scale, scale);
 
-    StereoCalibrationParams calib;
+    // camera params
+    double fx = 3979.911 * scale;
+    double cxL = 1244.772 * scale;
+    double cxR = 1369.115 * scale;
+    double cy = 1019.507 * scale;
+    double baseline = 193.001;
 
-    double fx = calib.fx;
-    double fy = calib.fy;
-    double cxL = calib.cxL;
-    double cxR = calib.cxR;
-    double cy = calib.cy;
+    // Q matrix calculation
+    cv::Mat Q = (cv::Mat_<double>(4, 4) <<
+        1, 0, 0, -cxL,
+        0, 1, 0, -cy,
+        0, 0, 0, fx,
+        0, 0, 1.0 / baseline, (cxR - cxL) / baseline);
 
-
-    // Q matrix based on calib.txt
-    cv::Mat Q;
-
-    // hard-coded from the calib file
     cv::Mat K1 = (cv::Mat_<double>(3, 3) << fx, 0, cxL,
         0, fx, cy,
         0, 0, 1);
@@ -74,9 +123,9 @@ int main(int argc, const char* argv[])
         0, fx, cy,
         0, 0, 1);
 
-
     // detect & match features on the original images
     cv::Ptr<cv::Feature2D> feature;
+    std::vector<cv::Point2f> ptsL, ptsR;
     int normType;
 
     if(mode == "sift"){
@@ -87,139 +136,103 @@ int main(int argc, const char* argv[])
         feature = cv::BRISK::create(30, 3, 1.0f);
         normType = cv::NORM_HAMMING;
     }
-    else if(mode == "clip")
-          std::cout << ""; // SELEN 
+    else if(mode == "clip"){
+        std::string clipMatchesFile = "../Data/clip_motorcycle_simple_matches.txt";
+        // Load CLIP matches from file
+        std::vector<CLIPMatch> clipMatches = readCLIPMatches(clipMatchesFile);
+        if (clipMatches.empty()) {
+            std::cerr << "Error: No CLIP matches loaded!" << std::endl;
+            return -1;
+        }
+        // Convert CLIP matches to point vectors
+        for (const auto& match : clipMatches) {
+            ptsL.push_back(match.left_point);
+            ptsR.push_back(match.right_point);
+        }
+        // Visualize CLIP matches
+        visualizeCLIPMatches(imgL, imgR, clipMatches, outputName + mode + "_opencv_sift_good_matches.jpg");
+        std::cout << "Loaded " << clipMatches.size() << " CLIP matches" << std::endl;
+    }
+    else {
+        std::cerr << "Unknown mode: " << mode << ". Use 'sift', 'brisk', or 'clip'." << std::endl;
+        return 1;
+    }
 
-    std::vector<cv::KeyPoint> kptsL_raw, kptsR_raw;
-    cv::Mat descL_raw, descR_raw;
-    feature->detectAndCompute(imgL, cv::noArray(), kptsL_raw, descL_raw);
-    feature->detectAndCompute(imgR, cv::noArray(), kptsR_raw, descR_raw);
-
-    // match descriptors with Brute-Force(BF)-Matcher
-    cv::Ptr<cv::BFMatcher> matcher = cv::BFMatcher::create(normType, false);
-    std::vector<std::vector<cv::DMatch>> knnMatches_raw;
-    matcher->knnMatch(descL_raw, descR_raw, knnMatches_raw, 2);
-
-    const float ratioThresh = 0.75f;
-    const float maxDescriptorDist = 70.0f;
-
-    std::vector<cv::DMatch> goodMatches_raw;
-    for (const auto& m : knnMatches_raw) {
-        if (m.size() < 2) continue;
-        if (m[0].distance < ratioThresh * m[1].distance && m[0].distance < maxDescriptorDist) {
-            goodMatches_raw.push_back(m[0]);
+    if (mode != "clip") {
+        std::vector<cv::KeyPoint> kptsL_raw, kptsR_raw;
+        cv::Mat descL_raw, descR_raw;
+        feature->detectAndCompute(imgL, cv::noArray(), kptsL_raw, descL_raw);
+        feature->detectAndCompute(imgR, cv::noArray(), kptsR_raw, descR_raw);
+    
+        // match descriptors with Brute-Force(BF)-Matcher
+        cv::Ptr<cv::BFMatcher> matcher = cv::BFMatcher::create(normType, false);
+        std::vector<std::vector<cv::DMatch>> knnMatches_raw;
+        matcher->knnMatch(descL_raw, descR_raw, knnMatches_raw, 2);
+    
+        const float ratioThresh = 0.2f;
+        std::vector<cv::DMatch> goodMatches_raw;
+        for (const auto& m : knnMatches_raw)
+            if (m[0].distance < ratioThresh * m[1].distance)
+                goodMatches_raw.push_back(m[0]);
+        for (const auto& m : goodMatches_raw) {
+            ptsL.push_back(kptsL_raw[m.queryIdx].pt);
+            ptsR.push_back(kptsR_raw[m.trainIdx].pt);
         }
     }
-
-    std::vector<cv::Point2f> ptsL, ptsR;
-    for (const auto& m : goodMatches_raw) {
-        ptsL.push_back(kptsL_raw[m.queryIdx].pt);
-        ptsR.push_back(kptsR_raw[m.trainIdx].pt);
-    }
-
-    cv::Mat F;
-    std::vector<cv::Point2f> inliersL, inliersR;
-
-    //F = estimateFundamentalMatrix(inliersL, inliersR);
-    std::vector<uchar> inlierMask;
-    F = estimateFundamentalMatrixRANSAC(ptsL, ptsR, inlierMask);
-    inliersL.clear();
-    inliersR.clear();
-    for (int i = 0; i < ptsL.size(); ++i) {
-        if (!inlierMask[i]) continue;
-
-        const cv::Point2f& pt1 = ptsL[i];
-        const cv::Point2f& pt2 = ptsR[i];
-
-        cv::Mat x1 = (cv::Mat_<double>(3, 1) << pt1.x, pt1.y, 1.0);
-        cv::Mat l2 = F * x1;  // epipolar line in right image: ax + by + c = 0
-
-        double a = l2.at<double>(0);
-        double b = l2.at<double>(1);
-        double c = l2.at<double>(2);
-
-        double dist = std::abs(a * pt2.x + b * pt2.y + c) / std::sqrt(a * a + b * b);
-
-        if (dist < 1.5) { // you can tune this value
-            inliersL.push_back(pt1);
-            inliersR.push_back(pt2);
-        }
-    }
-
-
-    cv::Mat E = K2.t() * F * K1;
-    cv::Mat R, T;
-    recoverPoseCustom(E, inliersL, inliersR, K1, R, T);
-
-
-    cv::Mat distCoeffs1 = cv::Mat::zeros(5, 1, CV_64F);
-    cv::Mat distCoeffs2 = cv::Mat::zeros(5, 1, CV_64F);
-    cv::Mat R1, R2, P1, P2;
-    cv::Size imageSize = imgL.size();
-
-
-    computeStereoRectification(
-        K1, distCoeffs1,
-        K2, distCoeffs2,
-        imageSize, R, T,
-        R1, R2, P1, P2, Q);
-
+    
+    //  estimate the fundamental matrix with RANSAC and reject outliers
+    cv::Mat maskF;
+    cv::Mat F = cv::findFundamentalMat(ptsL, ptsR, cv::FM_RANSAC, 3.0, 0.99, maskF);
 
     cv::Mat imgLRect, imgRRect;
-    cv::Mat map1x, map1y, map2x, map2y;
 
+    imgLRect = imgL.clone();
+    imgRRect = imgR.clone();
 
-    computeRectificationMap(K1, R1, P1, imageSize, map1x, map1y);
-    computeRectificationMap(K2, R2, P2, imageSize, map2x, map2y);
-
-
-    std::cout << "map1x.at<float>(0,0): " << map1x.at<float>(0, 0) << std::endl;
-    std::cout << "map1y.at<float>(0,0): " << map1y.at<float>(0, 0) << std::endl;
-
-
-    remapBilinear(imgL, imgLRect, map1x, map1y);
-    remapBilinear(imgR, imgRRect, map2x, map2y);
-
-
-    cv::imwrite(outputName + mode + " rectified_left.jpg", imgLRect);
-    cv::imwrite(outputName + mode + " rectified_right.jpg", imgRRect);
+    cv::imwrite(outputName + mode + "_opencv_rectified_left.jpg", imgLRect);
+    cv::imwrite(outputName + mode + "_opencv_rectified_right.jpg", imgRRect);
 
     // detect key-points & descriptors, basically as before but on the rectified images
-    std::vector<cv::KeyPoint> kptsL, kptsR;
-    cv::Mat descL, descR;
-    feature->detectAndCompute(imgLRect, cv::noArray(), kptsL, descL);
-    feature->detectAndCompute(imgRRect, cv::noArray(), kptsR, descR);
-
-    // draw SIFT keypoints on the images
-    cv::Mat imgKeypointsL, imgKeypointsR;
-    cv::drawKeypoints(imgLRect, kptsL, imgKeypointsL, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-    cv::drawKeypoints(imgRRect, kptsR, imgKeypointsR, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-
-    // record sift results
-    cv::imwrite(outputName + mode + " keypoints_left.jpg", imgKeypointsL);
-    cv::imwrite(outputName + mode + " keypoints_right.jpg", imgKeypointsR);
-
-    // match descriptors with Brute-Force(BF)-Matcher, again just as before but on rectified
-    std::vector< std::vector<cv::DMatch> > knnMatches;
-    matcher->knnMatch(descL, descR, knnMatches, 2);
-
-    std::vector<cv::DMatch> goodMatches;
-    for (const auto& m : knnMatches)
-        if (m[0].distance < ratioThresh * m[1].distance)
-            goodMatches.push_back(m[0]);
-
-    // draw matches
-    cv::Mat imgMatches;
-    cv::drawMatches(imgLRect, kptsL, imgRRect, kptsR,
-        goodMatches, imgMatches,
-        cv::Scalar::all(-1), cv::Scalar::all(-1),
-        std::vector<char>(),
-        cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-
-    // save keypoints matches
-    cv::imwrite(outputName + mode + " sgm_good_matches.jpg", imgMatches);
-
-    // Disparity map calculation
+    // skip for CLIP
+    if (mode != "clip") { 
+        std::vector<cv::KeyPoint> kptsL, kptsR;
+        cv::Mat descL, descR;
+        feature->detectAndCompute(imgLRect, cv::noArray(), kptsL, descL);
+        feature->detectAndCompute(imgRRect, cv::noArray(), kptsR, descR);
+    
+        // draw SIFT keypoints on the images
+        cv::Mat imgKeypointsL, imgKeypointsR;
+        cv::drawKeypoints(imgLRect, kptsL, imgKeypointsL, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+        cv::drawKeypoints(imgRRect, kptsR, imgKeypointsR, cv::Scalar::all(-1), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+    
+        // record sift results
+        cv::imwrite(outputName + mode + "_opencv_keypoints_left.jpg", imgKeypointsL);
+        cv::imwrite(outputName + mode + "_opencv_keypoints_right.jpg", imgKeypointsR);
+    
+        // match descriptors with Brute-Force(BF)-Matcher, again just as before but on rectified
+        cv::Ptr<cv::BFMatcher> matcher = cv::BFMatcher::create(normType, false);
+        std::vector< std::vector<cv::DMatch> > knnMatches;
+        matcher->knnMatch(descL, descR, knnMatches, 2);
+    
+        const float ratioThresh = 0.2f;
+        std::vector<cv::DMatch> goodMatches;
+        for (const auto& m : knnMatches)
+            if (m[0].distance < ratioThresh * m[1].distance)
+                goodMatches.push_back(m[0]);
+    
+        // draw matches
+        cv::Mat imgMatches;
+        cv::drawMatches(imgLRect, kptsL, imgRRect, kptsR,
+            goodMatches, imgMatches,
+            cv::Scalar::all(-1), cv::Scalar::all(-1),
+            std::vector<char>(),
+            cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+    
+        // save keypoints matches
+        cv::imwrite(outputName + mode + "_opencv_sift_good_matches.jpg", imgMatches);
+    }
+    
+    // Enhanced disparity computation with robust processing
     cv::Mat imgLGray, imgRGray;
     if (USE_GRAYSCALE) {
         imgLGray = imgLRect;
@@ -230,56 +243,52 @@ int main(int argc, const char* argv[])
         cv::cvtColor(imgRRect, imgRGray, cv::COLOR_BGR2GRAY);
     }
 
+    // Apply histogram equalization for better disparity computation
+    cv::Mat imgLPrep, imgRPrep;
+    cv::equalizeHist(imgLGray, imgLPrep);
+    cv::equalizeHist(imgRGray, imgRPrep);
 
-    SemiGlobalMatching sgm(imgLGray, imgRGray, 128, 5, 15, 150, 10);  // lower L-R threshold
-    sgm.SGM_process();
-    cv::Mat dispFloat = sgm.get_disparity_float();
+    // MODIFIED: Use robust SGBM instead of basic SGBM
+    std::cout << "Computing robust disparity..." << std::endl;
+    cv::Ptr<cv::StereoSGBM> sgbm = createRobustSGBM(imgLPrep, 128);
 
     cv::Mat disp16;
-    dispFloat.convertTo(disp16, CV_16S, 16.0);
-    int newSpeckleSize = 50;
-    int newMaxDiff = 32;
-    cv::filterSpeckles(disp16, 0, newSpeckleSize, newMaxDiff);
+    sgbm->compute(imgLPrep, imgRPrep, disp16);
 
-    disp16.convertTo(dispFloat, CV_32F, 1.0 / 16.0);
+    // Apply robust disparity filtering
+    cv::Mat improvedDisp = robustDisparityFiltering(disp16);
 
-    cv::Mat dispBilateral;
-    cv::bilateralFilter(dispFloat, dispBilateral, 9, 75, 75);
-    dispFloat = dispBilateral.clone();
+    // Visualize disparity
+    cv::Mat dispVis;
+    cv::normalize(improvedDisp, dispVis, 0, 255, cv::NORM_MINMAX, CV_8U);
+    cv::imwrite(outputPath + mode + "_opencv_disparity_map.jpg", dispVis);
 
-    // Mask invalid disparities
-    cv::Mat dispMask = (dispFloat > 0.1f) & (dispFloat < 128.0f);
-    cv::Mat dispFiltered;
-    dispFloat.copyTo(dispFiltered, dispMask);
-
-    // Scale Q matrix (due to image resizing)
-    double baseline_meters = 193.001;
-    cv::Mat Q_scaled = Q.clone();
-    Q_scaled.at<double>(3, 2) = 1.0 / baseline_meters;
-    Q_scaled.at<double>(3, 3) = -(cxL - cxR) / baseline_meters;
-
-    // Reproject to 3D
-    cv::Mat depthMap;
-    manualReprojectTo3D(dispFiltered, depthMap, Q_scaled);
-
-    // Normalize and visualize disparity
-    cv::Mat dispU8;
-    cv::normalize(dispFiltered, dispU8, 0, 255, cv::NORM_MINMAX, CV_8U);
     cv::Mat dispColor;
-    cv::applyColorMap(dispU8, dispColor, cv::COLORMAP_JET);
+    cv::applyColorMap(dispVis, dispColor, cv::COLORMAP_JET);
+    cv::imwrite(outputPath + mode + "_opencv_colored_disp.jpg", dispColor);
 
+    // MODIFIED: Enhanced 3D reconstruction with robust depth filtering
+    std::cout << "Performing robust 3D reconstruction..." << std::endl;
+    cv::Mat depthMap;
+    cv::reprojectImageTo3D(improvedDisp, depthMap, Q, true);
 
-    // Save results
-    cv::imwrite(outputPath + mode +  " sgm_disparity_map.jpg", dispU8);
-    cv::imwrite(outputPath + mode +  " sgm_disparity_map_color.jpg", dispColor);
+    // Apply robust depth outlier removal
+    cv::Mat cleanedDepth = removeDepthOutliersRobust(depthMap, 6000.0f, 800.0f);
 
+    std::vector<cv::Mat> xyz;
+    cv::split(cleanedDepth, xyz); 
 
-    // Write point cloud
-    writePointCloudPLY(dispFiltered, depthMap, imgL, outputPath + mode + " sgm_pointcloud.ply");
-
-    // Write mesh
-    writeMeshFromDepth(dispFloat, depthMap, outputPath + mode + " sgm_mesh.obj");
-
+    // MODIFIED: Use cleaned depth for outputs
+    writePointCloudPLY(improvedDisp, cleanedDepth, imgLRect, outputPath + mode + "_opencv_pointcloud.ply");
+    writeMeshFromDepth(improvedDisp, cleanedDepth, outputPath + mode + "_opencv_mesh.obj");
+    
+    std::cout << "\n=== Robust Processing Complete ===" << std::endl;
+    std::cout << "Mode: " << mode << std::endl;
+    std::cout << "Files generated:" << std::endl;
+    std::cout << "- " << outputPath << mode << "_opencv_disparity_map.jpg" << std::endl;
+    std::cout << "- " << outputPath << mode << "_opencv_colored_disp.jpg" << std::endl;
+    std::cout << "- " << outputPath << mode << "_opencv_pointcloud.ply" << std::endl;
+    std::cout << "- " << outputPath << mode << "_opencv_mesh.obj" << std::endl;
+    
     return 0;
 }
-
