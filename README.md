@@ -52,7 +52,7 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 ## Dataset
 
-- Dataset: [Middlebury 2014 - Motorcycle-perfect](https://vision.middlebury.edu/stereo/data/scenes2014/](https://vision.middlebury.edu/stereo/data/scenes2014/)
+- Dataset: https://vision.middlebury.edu/stereo/data/scenes2014/
 
 
 ## Function Descriptions 
