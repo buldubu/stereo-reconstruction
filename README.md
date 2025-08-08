@@ -62,9 +62,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **cv::Mat estimateFundamentalMatrix(const std::vector<cv::Point2f>& pts1, const std::vector<cv::Point2f>& pts2)**  
 **Inputs:**  
 - pts1: 2D points from the left image  
-- pts2: 2D points from the right image  
+- pts2: 2D points from the right image
+   
 **Output:**  
-- Fundamental matrix F  
+- Fundamental matrix F
+    
 **Purpose:**  
 - Estimates the fundamental matrix using the normalized 8-point algorithm.
 
@@ -74,10 +76,12 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **Inputs:**  
 - pts1, pts2: matched 2D points  
 - iterations: number of RANSAC iterations  
-- threshold: Sampson error threshold  
+- threshold: Sampson error threshold
+  
 **Outputs:**  
 - Robust fundamental matrix F  
-- inlierMask: binary mask of inliers  
+- inlierMask: binary mask of inliers
+   
 **Purpose:**  
 - Computes the fundamental matrix robustly using RANSAC and Sampson error.
 
@@ -85,10 +89,12 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **void normalizePoints(const std::vector<cv::Point2f>& pts, std::vector<cv::Point2f>& normPts, cv::Mat& T)**  
 **Inputs:**  
-- pts: original 2D points  
+- pts: original 2D points
+   
 **Outputs:**  
 - normPts: normalized points  
-- T: normalization transformation matrix  
+- T: normalization transformation matrix
+  
 **Purpose:**  
 - Normalizes input points to improve numerical stability.
 
@@ -98,10 +104,12 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **Inputs:**  
 - E: essential matrix  
 - pts1, pts2: matched 2D points  
-- K: camera intrinsics  
+- K: camera intrinsics
+   
 **Outputs:**  
 - R: rotation matrix  
-- t: translation vector  
+- t: translation vector
+  
 **Purpose:**  
 - Recovers camera pose from the essential matrix using a cheirality check.
 
@@ -112,11 +120,13 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - K1, K2: camera intrinsics  
 - D1, D2: distortion coefficients  
 - imageSize: size of the stereo images  
-- R, T: rotation and translation between cameras  
+- R, T: rotation and translation between cameras
+  
 **Outputs:**  
 - R1, R2: rectification rotations  
 - P1, P2: projection matrices  
-- Q: disparity-to-depth mapping matrix  
+- Q: disparity-to-depth mapping matrix
+  
 **Purpose:**  
 - Computes stereo rectification and projection matrices for both cameras.
 
@@ -127,9 +137,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - K: camera intrinsics  
 - R: rotation matrix  
 - P: projection matrix  
-- imageSize: image size  
+- imageSize: image size
+  
 **Outputs:**  
-- mapX, mapY: remap matrices  
+- mapX, mapY: remap matrices
+  
 **Purpose:**  
 - Computes remapping coordinates for image rectification.
 
@@ -138,9 +150,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **void remapBilinear(const cv::Mat& src, cv::Mat& dst, const cv::Mat& mapX, const cv::Mat& mapY)**  
 **Inputs:**  
 - src: source image  
-- mapX, mapY: remapping matrices  
+- mapX, mapY: remapping matrices
+  
 **Output:**  
-- dst: remapped image  
+- dst: remapped image
+  
 **Purpose:**  
 - Applies bilinear interpolation using custom remap maps.
 
@@ -150,9 +164,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **Inputs:**  
 - val: value to clamp  
 - low: minimum value  
-- high: maximum value  
+- high: maximum value
+  
 **Output:**  
-- Clamped value  
+- Clamped value
+  
 **Purpose:**  
 - Utility function to keep a value within bounds.
 
@@ -164,7 +180,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - max_disp: maximum disparity  
 - census_size: size of the census transform window  
 - penalty_1, penalty_2: smoothness penalties  
-- lr_threshold: left-right consistency threshold  
+- lr_threshold: left-right consistency threshold
+   
 **Purpose:**  
 - Initializes the Semi-Global Matching pipeline and allocates memory.
 
@@ -185,9 +202,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **uint64_t SemiGlobalMatching::compute_census_at(const cv::Mat& img, int x, int y) const**  
 **Inputs:**  
 - img: grayscale image  
-- x, y: pixel location  
+- x, y: pixel location
+  
 **Output:**  
-- 64-bit census value  
+- 64-bit census value
+  
 **Purpose:**  
 - Computes census transform at a specific pixel location.
 
@@ -195,9 +214,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **int SemiGlobalMatching::hamming_distance(uint64_t a, uint64_t b) const**  
 **Inputs:**  
-- a, b: 64-bit census descriptors  
+- a, b: 64-bit census descriptors
+  
 **Output:**  
-- Hamming distance between a and b  
+- Hamming distance between a and b
+  
 **Purpose:**  
 - Measures bitwise difference between two census values.
 
@@ -218,7 +239,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **void SemiGlobalMatching::aggregate_path(int start_x, int start_y, int dx, int dy)**  
 **Inputs:**  
 - start_x, start_y: starting pixel  
-- dx, dy: direction of aggregation  
+- dx, dy: direction of aggregation
+    
 **Purpose:**  
 - Aggregates matching costs along a single path using penalties.
 
@@ -256,9 +278,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **bool SemiGlobalMatching::is_valid_pixel(int x, int y) const**  
 **Inputs:**  
-- x, y: pixel coordinates  
+- x, y: pixel coordinates
+  
 **Output:**  
-- true if pixel is inside image bounds  
+- true if pixel is inside image bounds
+  
 **Purpose:**  
 - Checks if a pixel is valid for processing.
 
@@ -266,7 +290,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **cv::Mat SemiGlobalMatching::get_disparity() const**  
 **Output:**  
-- 8-bit disparity map (left view)  
+- 8-bit disparity map (left view)
+   
 **Purpose:**  
 - Returns the final disparity map.
 
@@ -274,7 +299,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **cv::Mat SemiGlobalMatching::get_disparity_float() const**  
 **Output:**  
-- Float disparity map with subpixel accuracy  
+- Float disparity map with subpixel accuracy
+  
 **Purpose:**  
 - Returns the subpixel-refined disparity map.
 
@@ -282,7 +308,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 
 **cv::Mat SemiGlobalMatching::get_disparity_left_right() const**  
 **Output:**  
-- Float disparity map from the right view  
+- Float disparity map from the right view
+  
 **Purpose:**  
 - Returns the right-view disparity map for consistency checking.
 
@@ -291,9 +318,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **void vectorizedReprojectTo3D(const cv::Mat& disp, cv::Mat& depthMap, const cv::Mat& Q)**  
 **Inputs:**  
 - disp: input disparity map (CV_32F)  
-- Q: 4x4 reprojection matrix from stereo calibration  
+- Q: 4x4 reprojection matrix from stereo calibration
+  
 **Output:**  
-- depthMap: output 3D point map (CV_32FC3)  
+- depthMap: output 3D point map (CV_32FC3)
+  
 **Purpose:**  
 - Projects disparity map into 3D space using matrix multiplication and vectorized operations for better performance.
 
@@ -303,9 +332,11 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **Inputs:**  
 - disp: input disparity map (CV_32F)  
 - Q: reprojection matrix  
-- vectorized: optional flag to choose between manual loop or vectorized version  
+- vectorized: optional flag to choose between manual loop or vectorized version
+    
 **Output:**  
-- depthMap: output 3D point map (CV_32FC3)  
+- depthMap: output 3D point map (CV_32FC3)
+  
 **Purpose:**  
 - Computes 3D coordinates for each pixel using the disparity and Q matrix. Supports both manual and vectorized backends.
 
@@ -316,7 +347,8 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - disparityMap: disparity values (CV_32F)  
 - depthMap: 3D points (CV_32FC3)  
 - leftImage: original left color image (CV_8UC3)  
-- filename: output `.ply` file path  
+- filename: output `.ply` file path
+  
 **Purpose:**  
 - Exports a colored 3D point cloud as a PLY file using disparity and depth maps.
 
@@ -328,11 +360,12 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - depthMap: reprojected 3D map (CV_32FC3)  
 - colorImage: RGB texture source image  
 - filename: output mesh filename (PLY)  
-- max_z_diff: optional depth discontinuity threshold  
+- max_z_diff: optional depth discontinuity threshold
+  
 **Purpose:**  
 - Creates a colored triangular mesh from the depth map and exports it in PLY format. Neighboring points are connected if their Z-difference is within the threshold.
 
-  ## Function Descriptions
+## Function Descriptions
 
   ### 1-) Dependencies
   - OpenCV 4.x
