@@ -55,7 +55,7 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 - Dataset: [Middlebury 2014 - Motorcycle-perfect](https://vision.middlebury.edu/stereo/data/scenes2014/)
 
 
-## Functions Explanations
+## Function Descriptions 
 
 ### 1-) reconstruction.h
 
@@ -365,7 +365,7 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
 **Purpose:**  
 - Creates a colored triangular mesh from the depth map and exports it in PLY format. Neighboring points are connected if their Z-difference is within the threshold.
 
-## Function Descriptions
+## Installation & Usage
 
   ### 1-) Dependencies
   - OpenCV 4.x
