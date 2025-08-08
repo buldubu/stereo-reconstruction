@@ -1,13 +1,6 @@
-g++ main.cpp -o app \
-  -I/usr/local/include/opencv4 \
-  -L/usr/local/lib \
-  -lopencv_core \
-  -lopencv_imgproc \
-  -lopencv_imgcodecs \
-  -lopencv_highgui \
-  -lopencv_features2d \
-  -lopencv_flann
-./app
+rm ./app
 
-# g++ main.cpp -I/usr/local/include/opencv4 -L/usr/local/lib -lopencv_core -lopencv_imgproc -lopencv_highgui
-# ./a.out
+g++ -std=c++17 custom.cpp reconstruction.cpp  SemiGlobalMatching.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp
+# g++ -std=c++17 opencv.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp
+
+./app sift
