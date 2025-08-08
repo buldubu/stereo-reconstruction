@@ -1,6 +1,0 @@
-* Feature extraction - cv::SIFT
-* Feature matching - cv::BFMatcher (L2, KNN + Lowe ratio)
-* 8-point algorithm / Fundamental matrix - cv::findFundamentalMat (RANSAC)
-* Essential matrix & pose recovery - cv::recoverPose
-* Rectification - cv::stereoRectify + cv::initUndistortRectifyMap + cv::remap
-* Disparity - 
