@@ -374,14 +374,14 @@ A fully custom 8-path Semi-Global Matching (SGM) pipeline:
   - OpenMP (to install: `sudo apt install libomp-dev`)
     
   ### 2-) Running the Custom Pipeline
-  - open terminal at project root, navigate to the `source` folder with "cd source" command, and type: 
-  - g++ -std=c++17 custom.cpp reconstruction.cpp  SemiGlobalMatching.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp
+  - open terminal at project root, navigate to the `source` folder with `cd source` command, and type: 
+  - `g++ -std=c++17 custom.cpp reconstruction.cpp  SemiGlobalMatching.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp`
   -> For run with sift:  type `./app sift`
   -> For run with brisk: type `./app brisk`
 
    ### 3-) Running the OpenCV Pipeline
-  - open terminal at project root, navigate to the `source` folder with "cd source" command, and type: 
-  - g++ -std=c++17 opencv.cpp reconstruction.cpp  SemiGlobalMatching.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp
+  - open terminal at project root, navigate to the `source` folder with `cd source` command, and type: 
+  - `g++ -std=c++17 custom.cpp reconstruction.cpp  SemiGlobalMatching.cpp -o app  $(pkg-config --cflags --libs opencv4) -O3 -march=native -funroll-loops -fopenmp`
   -> For run with sift:  type `./app sift`
   -> For run with brisk: type `./app brisk`
 
